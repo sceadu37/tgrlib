@@ -5,6 +5,7 @@ import tgrlib
 import argparse
 from PIL import Image
 from pathlib import Path
+import config as cfg
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -17,12 +18,15 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable debugging printouts')
     parser.add_argument('--no-align-frames', action='store_true', help='Disable frame alignment within image size')
     parser.add_argument('--single-frame', default=-1, type=int, help='Extract only the specified frame')
+    parser.add_argument('--file-type', choices=['projectile','unit','portrait'], default='unit')
     
     args = parser.parse_args()
     
     image_path = args.image_path
     
-    player_color = args.color
+    cfg.player_color = args.color
+    cfg.verbose = args.verbose
+    cfg.file_type = args.file_type
 
     imagefile = tgrlib.tgrFile(image_path, False)
 
@@ -50,7 +54,7 @@ if __name__ == "__main__":
         imagedata = b""
         with open(image_path, "rb") as in_fh:
             for idx in range(len(frame.lines)):
-                rawline = imagefile.extractLine(in_fh, frame_index=frame_index, line_index=idx, increment=0, color=player_color)
+                rawline = imagefile.extractLine(in_fh, frame_index=frame_index, line_index=idx, increment=0)
                 #print(f"{idx+1:3d}: 0x{frame.lines[idx].offset:06x}, {len(rawline)}")
                 if len(rawline) < frame.size[0]:
                     rawline += [tgrlib.transparency for _ in range(frame.size[0] - len(rawline))]

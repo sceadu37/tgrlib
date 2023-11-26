@@ -7,6 +7,7 @@ import io
 import typing
 from dataclasses import dataclass
 from pathlib import Path
+import config as cfg
 
 def read_line_length(in_fh: io.BufferedReader):
     rawlen = in_fh.read(2)
@@ -246,7 +247,7 @@ class tgrFile:
             (raw_pixel,) = struct.unpack("H", in_fh.read(2))
             return Pixel.from_int(raw_pixel)
 
-    def extractLine(self, fh: io.BufferedReader, frame_index=0, line_index=0, increment=0, color=2):
+    def extractLine(self, fh: io.BufferedReader, frame_index=0, line_index=0, increment=0):
         outbuf = []
         line_ix = 0
         pixel_ix = 0
@@ -256,11 +257,14 @@ class tgrFile:
         for _ in range(line.transparent_pixels):
             outbuf.append(transparency)
         pixel_ix += line.transparent_pixels
-        
+        run_index = -1
         while line_ix < line.data_length:# and pixel_ix < line.pixel_length:
+            run_index += 1
             run_header = fh.read(1)
             line_ix += 1
             (flag, run_length) = getRunData(run_header[0])
+            if cfg.verbose:
+                print(f"f:{frame_index} l:{line_index} r:{run_index} flag:{flag}")
             match flag:
                 case 0b000:
                     outbuf += [transparency for _ in range(run_length + increment)]
@@ -297,22 +301,36 @@ class tgrFile:
                     outbuf += [shadow for _ in range(run_length + increment)]
                 case 0b110:
                     #print(f"flag 6 at 0x{fh.tell()-1:08x}")
-                    outbuf.append(player_cols[color][run_length])
+                    outbuf.append(player_cols[cfg.player_color][run_length])
                     pixel_ix += 1
                 case 0b111:
-                    read_length = (run_length + 1) // 2
-                    color_index = fh.read(read_length)
-                    line_ix += read_length
-                    
-                    for i, b in enumerate(color_index):
-                        # splits the byte into two 4bit sections, shifts left 1bit, and sets least sig to 1
-                        # then uses as index for player color value
-                        outbuf.append(player_cols[color][((b >> 3) & 0b11111) | 0b1])
-                        pixel_ix += 1
-                        # Don't append trailing null padding on odd run lengths
-                        if (run_length % 2 == 0) or (i < len(color_index) - 1):
-                            outbuf.append(player_cols[color][((b << 1) & 0b11111) | 0b1])
-                            pixel_ix += 1                    
+                    if cfg.verbose:
+                        line_ix_start = line_ix
+                        print("reading flag 0b111")
+                    match cfg.file_type:
+                        case 'unit':
+                            read_length = (run_length + 1) // 2
+                            color_index = fh.read(read_length)
+                            line_ix += read_length
+                            
+                            for i, b in enumerate(color_index):
+                                # splits the byte into two 4bit sections, shifts left 1bit, and sets least sig to 1
+                                # then uses as index for player color value
+                                outbuf.append(player_cols[cfg.player_color][((b >> 3) & 0b11111) | 0b1])
+                                pixel_ix += 1
+                                # Don't append trailing null padding on odd run lengths
+                                if (run_length % 2 == 0) or (i < len(color_index) - 1):
+                                    outbuf.append(player_cols[cfg.player_color][((b << 1) & 0b11111) | 0b1])
+                                    pixel_ix += 1
+                        case 'projectile':
+                            outbuf.append(Pixel(0x00, 0xff, 0xff))
+                            fh.seek(1,1)
+                            line_ix += 1
+                            pixel_ix += 1                        
+                            
+                    if cfg.verbose:
+                        print(f"-->run data read from {line_ix_start} to {line_ix}")
+                                    
                 case _:
                     print(f"{line_index:3d},{pixel_ix:3d}: Unsupported flag {flag} in datapoint 0x{run_header[0]:02x} at offset 0x{fh.tell()-1:08x}")
         if len(outbuf) < line.pixel_length:
