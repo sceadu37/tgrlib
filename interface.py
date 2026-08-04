@@ -12,6 +12,7 @@ from PyQt5.QtGui import QPixmap, QMovie
 from pathlib import Path
 from argparse import Namespace
 from io import BytesIO
+from PIL import Image
 
 import tgrtool
 import tgrlib
@@ -376,7 +377,12 @@ class Preview(QtWidgets.QWidget):
         imgs = []
         img_buffer = BytesIO()
         for i in range(start_frame_index, start_frame_index+gif_length):
-            imgs.append(tgrtool.unpack_frame(tgr, i, color=self.parent().settings.color.currentIndex()+1))
+            img = tgrtool.unpack_frame(tgr, i, color=PlayerColorNames.get(self.parent().settings.color.currentText(), tgrlib.PlayerColor.NONE))
+            # Pillow has issues with saving images with alpha channels as GIFs, so we need to composite the image onto a white background first
+            background = Image.new('RGBA', img.size, (255,255,255,255))
+            background.alpha_composite(img)
+            imgs.append(background)
+
         imgs[0].save(img_buffer, format="gif", save_all=True, append_images=imgs[1:], duration=100, loop=0, disposal=2)
         imgs[0].save("out.gif", save_all=True, append_images=imgs[1:], duration=100, loop=0, disposal=2)
         return img_buffer
