@@ -1,0 +1,49 @@
+//------------------------------------------------
+//--- 010 Editor v15.0.1 Script File
+//
+//      File: 
+//   Authors: 
+//   Version: 
+//   Purpose: 
+//  Category: 
+//   History: 
+//------------------------------------------------
+
+FORM.length = FileSize() - sizeof( FORM_CHUNK );
+
+local int i = 0;
+local int j;
+local int chunk_length;
+local int offset;
+while( exists( FRAM[i] ) ) {
+    Printf("reading frame %i\n", i);
+    j = 0;
+    chunk_length = 0;
+    Printf("\treading lines...");
+    while( exists( FRAM[i].line[j] ) ) {
+        if( exists( FRAM[i].line[j].line_length[1] ) ) {
+            chunk_length += ((FRAM[i].line[j].line_length[0] & 0b01111111) << 8) | FRAM[i].line[j].line_length[1];  // combines both bytes and strips the flag bit
+        } else {
+            chunk_length += FRAM[i].line[j].line_length;
+        }
+        j++;
+    }
+    Printf("read %i lines\n", j);
+    j = 0;
+    while( exists( FRAM[i].padding[j++] ) ) {
+        chunk_length++;
+    }
+    
+    Printf("\tUpdating chunk_length: %i -> %i\n", FRAM[i].chunk_length, chunk_length);
+    FRAM[i].chunk_length = chunk_length;
+    
+    if( chunk_length == 0 ) {
+        offset = 0;
+    } else {
+        offset = startof( FRAM[i] ) + 8;
+    }
+    Printf("\tUpdating offset: %i -> %i\n", HEDR.frame_sizes[i].offset, offset);
+    HEDR.frame_sizes[i].offset = offset;
+    i++;
+}
+Printf("Done! Updated %i frames\n", i);

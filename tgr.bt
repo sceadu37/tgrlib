@@ -309,9 +309,10 @@ typedef struct {
     LittleEndian();
     uint32 version;
     uint16 frame_count;
-    ubyte bit_depth;
+    ubyte bit_depth <format=decimal, bgcolor=cGreen, fgcolor=cBlack>;
     ubyte file_type;  // 00 for game objects, 01 for portraits, 02 for terrain, 03 for alpha masks
-    uint16 index_mode;
+    uint8 mode1 <format=hex, bgcolor=cRed, fgcolor=cBlack>;
+    uint8 mode2 <format=hex, bgcolor=cBlue, fgcolor=cGray>;
     uint16 offset_flag;
     
     struct SIZE {
@@ -331,7 +332,7 @@ typedef struct {
         uint16 y_max;
     } bounding_box;
     
-    byte unknown1[8]; // seems to contain max frame size
+    uint16 unknown1[4]; // seems to contain max frame size
     
     uint32 offset_palette;  // number of bytes from start of file to begining of palette_size (9th byte of PALT)
     

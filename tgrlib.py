@@ -339,15 +339,19 @@ class tgrFile:
             in_fh.seek(self.iff.data.children[0].data_offset)
             (self.version,
              self.framecount,
-             self.bits_per_px) = struct.unpack("IHBx", in_fh.read(8))
-            (index_mode,
-             self.offset_flag) = struct.unpack("xBBx", in_fh.read(4))
+             self.bits_per_px,
+             self.file_type,) = struct.unpack("IHBB", in_fh.read(8))
+            (self.mode_1,
+             self.mode_2,
+             self.offset_flag) = struct.unpack("BBH", in_fh.read(4))
             self.size = struct.unpack("HH", in_fh.read(4))
             self.hotspot = struct.unpack("HH", in_fh.read(4))
             print(f'[Info] Total image size: {self.size}') if verbose > 0 else None
-            self.indexed_colour = index_mode & 0x7f == 0x1a
+            self.indexed_colour = self.bits_per_px == 8
             self.bounding_box = [*struct.unpack('HHHH',in_fh.read(8))]
-            in_fh.seek(12, 1)
+            self.unknown_shorts = [*struct.unpack('HHHH',in_fh.read(8))]
+            self.palette_offset = struct.unpack('I',in_fh.read(4))
+            #in_fh.seek(12, 1)
             for _ in range(self.framecount):
                 (ulx, uly, lrx, lry, offset) = struct.unpack("HHHHI", in_fh.read(12))
                 # Skip empty frames (offset will be zero)
