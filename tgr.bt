@@ -1,17 +1,21 @@
 //------------------------------------------------
 //--- 010 Editor v14.0 Binary Template
 //
-//      File: 
+//      File: tgr.bt
 //   Authors: Sceadu
-//   Version: 
-//   Purpose: 
-//  Category: 
+//   Version: 1.1
+//   Purpose: Parse animation assets from Kohan: Ahriman's Gift
+//  Category: Game
 // File Mask: *.TGR
-//  ID Bytes: 
-//   History: 
+//  ID Bytes: 46 4F 52 4D [+4] 54 47 41 52
+//   History:
+//   1.1   2026-08-25 Sceadu: Improved abstraction & misc. code cleanup
+//   1.0   2026-03-06 Sceadu: Initial version.
+//
 //------------------------------------------------
-
+//
 // This Template will work with most TGRs, with or without a palette
+// For more information, see https://github.com/tim-de/tgrlib
 
 LittleEndian();
 BitfieldDisablePadding();
@@ -30,6 +34,12 @@ typedef struct {
     uint16 frame_count;
     uint16 animation_count; // # of camera angles for the animation
 } ANIMATION;
+
+typedef uint32 CHUNK_LENGTH <fgcolor=0x3C8E38>;
+
+typedef uchar IFF_NAME[4] <bgcolor=0x3C8E38,
+                           read=Str("%s", this),
+                           write=( this = value )>;
 
 // Represents an 'immediate color' pixel (16 bits representing color)
 typedef struct {
@@ -58,7 +68,6 @@ int64 PixelColor( IMM_PIXEL &p ) {
     local uint64 g8 = (double)p.green / 63.0 * 255.0;
     local uint64 b8 = (double)p.blue / 31.0 * 255.0;
     return (b8 << 16 | g8 << 8 | r8);
-    //return 0xFFFFFF;
 }
 
 string ImmColorComment ( IMM_PIXEL &p ) {
@@ -88,7 +97,6 @@ int64 IndPixelColor( IND_PIXEL &p ) {
     local uint64 g8 = (double)PALT.pixels[p.index].green / 63.0 * 255.0;
     local uint64 b8 = (double)PALT.pixels[p.index].blue / 31.0 * 255.0;
     return (b8 << 16 | g8 << 8 | r8);
-    //return 0xFFFFFF;
 }
 
 string IndColorComment ( IND_PIXEL &p ) {
@@ -177,13 +185,13 @@ typedef struct {
             case 0b111:     // Run Length encoded run of player color pixels
                 local ubyte flag = ReadByte();
                 if ((flag & 0b00011111) > 0b11011) {
-                    ubyte run_type : 3 <comment="RLE player-pixel run">;
+                    ubyte run_type : 3 <comment="Translucent player-pixel">;
                     ubyte fixed_bits : 3;
                     ubyte ix_l : 2;
                     ubyte ix_h : 3 <comment="Use (ix_h<<2)|ix_l for correct index">;
-                    ubyte alpha : 5;
+                    ubyte alpha : 5 <read=Str( this / 31 * 255 )>;
                 } else {
-                    ubyte run_type : 3;
+                    ubyte run_type : 3 <comment="RLE player-pixel run">;
                     ubyte run_length : 5;                
                     PLYR_PIXEL player_pixels[(run_length + 1) >> 1];  // Since each byte holds 2 pixels, divide taking the ceiling 
                 }
@@ -195,47 +203,37 @@ typedef struct {
     }
 } RUN;
 
-//string indexComment()
+// a struct to represent the variable-width integers used in RLE raster line headers
+typedef struct {
+    ubyte raw_value;
+    local int value = raw_value;
+    local int size = 1;
+    if ((value >> 7) == 1) {  // if highest bit is set, indicates value is 2 bytes long
+        ubyte raw_value;
+        value = ((raw_value[0] & 0b01111111) << 8) | raw_value[1];  // combines both bytes and strips the flag bit
+        size++;
+    }
+} VARINT <fgcolor=cYellow, read=Str( "%i", this.value )>;
+//TODO: add VARINT write function
 
 // LINE
 typedef struct {
-    // line_length is used as a duplicate array to grab 2 bytes 
-    // if the line starts 8X, and to just grab one otherwise
-    local int ct_header_bytes = 3;
-    
-    ubyte line_length;
-    local int total_line_length = line_length;
-    if ((line_length >> 7) == 1) {  
-        ubyte line_length; // length of line in bytes, including header
-        total_line_length = ((line_length[0] & 0b01111111) << 8) | line_length[1];  // combines both bytes and strips the flag bit
-        ct_header_bytes += 1;
-    }
-    
-    ubyte offset;
-    local int total_offset = offset;
-    if ((offset >> 7) == 1) {  
-        ubyte offset; // offset to start of line data, if there are transparent/padding pixels
-        total_offset = ((offset[0] & 0b01111111) << 8) | offset[1];  // combines both bytes and strips the flag bit
-        ct_header_bytes += 1;
-    }
-    
-    ubyte ct_pixels;
-    local int total_ct_pixels = ct_pixels;
-    if ((ct_pixels >> 7) == 1) {  
-        ubyte ct_pixels; // number of pixels in line
-        total_ct_pixels = ((ct_pixels[0] & 0b01111111) << 8) | ct_pixels[1];  // combines both bytes and strips the flag bit
-        ct_header_bytes += 1;
-    }
-    
+    local int ct_header_bytes = 0;
+
+    VARINT line_length;
+    ct_header_bytes += line_length.size;
+
+    VARINT offset;
+    ct_header_bytes += offset.size;
+
+    VARINT ct_pixels;
+    ct_header_bytes += ct_pixels.size;
+
     local int bytes_used = ct_header_bytes;
-    while (bytes_used < total_line_length) {
+    while (bytes_used < line_length.value) {
         RUN run;
         bytes_used += sizeof(run);
     }
-    
-    
-    
-    //ubyte line_data[total_line_length - ct_header_bytes]; // (-ct_header_bytes) to account for size of header
 } LINE <optimize=false/*, size=SizeLINE*/>;
 
 
@@ -250,19 +248,19 @@ int SizeLINE( LINE &line ) {
 }
 
 typedef struct {
-    char chunk_name[4];
+    IFF_NAME chunk_name;
     BigEndian();
-    uint32 chunk_length; //distance from end of chunk_length to next FRAM
+    CHUNK_LENGTH chunk_length; //distance from end of chunk_length to next FRAM
     LittleEndian();
-    // If TGR is a terrain file
+    // Check FRAM type to determine appropriate unpacking procedure
     switch(HEDR.file_type) {
-        case 2:
+        case TYPE_TERRAIN:
             struct TERRAIN {
                 IMM_PIXEL pixel[1024];
                 char footer[chunk_length - 2048];
             } terrain;
             break;
-        case 3:
+        case TYPE_ALPHA_MASK:
             struct ALPHA_MASK {
                 ubyte mask_pixel[512];
             } alpha_mask;
@@ -279,40 +277,46 @@ typedef struct {
                 }
             }
             break;
-        
     }
 } FRAM_CHUNK <optimize=false>;
 
 typedef struct {
     char chunk_name[4];
     BigEndian();
-    uint32 chunk_length;
+    CHUNK_LENGTH chunk_length;
     LittleEndian();
     uint16 palette_size;
     IMM_PIXEL pixels[palette_size] <optimize=false>;
 } PALT_CHUNK;
 
-
 typedef struct {
-    char chunk_name[4];  // Always FORM
+    IFF_NAME chunk_name;  // Always FORM
     BigEndian();
-    int32 length;  //length in bytes from start of HEDR to end of file
+    CHUNK_LENGTH length;  //length in bytes from start of HEDR to end of file
     LittleEndian();
-    char file_type[4];  // Always TGAR
+    IFF_NAME file_type;  // Always TGAR
+    if( Strcmp(chunk_name, "FORM") != 0 ){
+        Warning("[Error] Chunk name \"%s\" isn't \"FORM\". Exiting", chunk_name);
+        Exit(-1);
+    }
+    if( Strcmp(file_type, "TGAR") != 0 ){
+        Warning("[Error] File type \"%s\" isn't \"TGAR\". Exiting", file_type);
+        Exit(-1);
+    }
 } FORM_CHUNK;
 
 typedef struct {
-    char chunk_name[4];
+    IFF_NAME chunk_name;
     BigEndian();
-    uint32 chunk_length;
+    CHUNK_LENGTH chunk_length;
     local int start_pos = FTell();
     LittleEndian();
     uint32 version;
     uint16 frame_count;
-    ubyte bit_depth <format=decimal, bgcolor=cGreen, fgcolor=cBlack>;
-    ubyte file_type;  // 00 for game objects, 01 for portraits, 02 for terrain, 03 for alpha masks
-    uint8 mode1 <format=hex, bgcolor=cRed, fgcolor=cBlack>;
-    uint8 mode2 <format=hex, bgcolor=cBlue, fgcolor=cGray>;
+    ubyte bit_depth <format=decimal, fgcolor=cYellow>;
+    enum <ubyte> FILE_TYPE { TYPE_OBJECT, TYPE_PORTRAIT, TYPE_TERRAIN, TYPE_ALPHA_MASK } file_type;
+    uint8 mode1 <format=hex, fgcolor=cYellow>;
+    uint8 mode2 <format=hex, fgcolor=cYellow>;
     uint16 offset_flag;
     
     struct SIZE {
@@ -332,7 +336,7 @@ typedef struct {
         uint16 y_max;
     } bounding_box;
     
-    uint16 unknown1[4]; // seems to contain max frame size
+    uint8 unknown1[8]; // seems to contain max frame size
     
     uint32 offset_palette;  // number of bytes from start of file to begining of palette_size (9th byte of PALT)
     
@@ -342,16 +346,15 @@ typedef struct {
     ANIMATION anim[anim_count];
 } HEDR_CHUNK;
 
-
 typedef struct {
-    char chunk_name[4];
+    IFF_NAME chunk_name;
     BigEndian();
-    uint32 chunk_length <fgcolor=0x3C8E38>;
+    CHUNK_LENGTH chunk_length;
     LittleEndian();
     char data[chunk_length];
 } PLACEHOLDER_CHUNK;
 
-local uchar chunk_name[4];
+local IFF_NAME chunk_name;
 FSeek(0);
 local int start_pos = 0;
 while (!FEof()) {
@@ -365,7 +368,6 @@ while (!FEof()) {
         
         default:
             PLACEHOLDER_CHUNK chunk;
-            //FSeek(FTell()+chunk.chunk_length);
             break;
     }
 }
