@@ -29,6 +29,8 @@ frame_number_re = re.compile(r"fram_(\d{1,4})")
 
 max_alpha = lambda p: Pixel(*(p.values()[:3]))
 
+MAX_RUN_LENGTH = 24
+
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
@@ -487,7 +489,7 @@ class tgrFile:
         return outbuf
     
     def read_config(self, config_path: str|None=None):
-        config = ConfigParser()
+        config = ConfigParser(delimiters=('=',))
         if config_path is None:
             config_path = (self.filename.parent if self.filename.is_file() else self.filename) / "sprite.ini"
         print(f"[Info] reading config from {config_path}") if verbose > 1 else None
@@ -516,7 +518,7 @@ class tgrFile:
     def write_config(self, config_path: str|None=None):
         if config_path == None:
             config_path = f'{self.filename.stem}/sprite.ini'
-        config = ConfigParser(dict_type=OrderedDict, allow_no_value=True)
+        config = ConfigParser(dict_type=OrderedDict, allow_no_value=True, delimiters=('=',))
         config.optionxform = str
         config.add_section('Description')
         config.set('Description', (f'; This file contains metadata for the extracted sprite {self.filename.stem+self.filename.suffix}\n'+
@@ -586,7 +588,7 @@ class tgrFile:
                 if translucent and collected == 22:
                     break
                 # Reduced from 30 for compatibility with certain gui sprites
-                if collected == 23:
+                if collected == MAX_RUN_LENGTH - 1:
                     break
             return collected
         else:
@@ -601,7 +603,7 @@ class tgrFile:
                     break
                 print(f"\tLook_Ahead: pixel {this_pixel} at c:{pixel_ix + collected} doesn't match pixel {next_pixel} at c:{pixel_ix + collected + 1}") if verbose > 2 else None
                 collected += 1
-                if collected == 31:
+                if collected == MAX_RUN_LENGTH:
                     break
             print(f'\tLook_Ahead: collected {collected} individual pixels') if verbose > 2 else None
             return collected
@@ -611,8 +613,8 @@ class tgrFile:
         line_length = len(outbuf)
         header_length = 3
         
-        assert line_length <= 0x7FFA, f'f:{frame_index: >4} l:{line_index: >4} line length {line_length} exceeds 15 bit maximum'
-        assert offset <= 0xFF, f'f:{frame_index: >4} l:{line_index: >4} offset to first non-padding pixel {offset} exceeds 8 bit maximum'
+        assert line_length <= 0x7FF9, f'f:{frame_index: >4} l:{line_index: >4} line length {line_length} + hax header size exceeds 15 bit maximum'
+        assert offset <= 0x7FFF, f'f:{frame_index: >4} l:{line_index: >4} offset to first non-padding pixel {offset} exceeds 15 bit maximum'
         assert ct_pixels <= 0x7FFF, f'f:{frame_index: >4} l:{line_index: >4} pixel count {ct_pixels} exceeds 15 bit maximum'
         
         if ct_pixels > 0x7F:
@@ -622,6 +624,13 @@ class tgrFile:
         else:
             pfc = 'B'
         
+        if offset > 0x7F:
+            offset = offset | 0x8000
+            ofc = 'H'
+            header_length += 1
+        else:
+            ofc = 'B'
+
         if line_length + header_length > 0x7F:
             line_length = line_length | 0x8000
             lfc = 'H'
@@ -629,7 +638,7 @@ class tgrFile:
         else:
             lfc = 'B'
         
-        return struct.pack('>'+lfc+'B'+pfc, line_length+header_length, offset, ct_pixels) + outbuf
+        return struct.pack('>'+lfc+ofc+pfc, line_length+header_length, offset, ct_pixels) + outbuf
         
         
     def encodeLine(self, frame_index=0, line_index=0, color=None):
@@ -647,13 +656,14 @@ class tgrFile:
             p = Pixel(*self.img_data[frame_index][line_index*self.framesizes[frame_index][0] + pixel_ix])
             print(f'reading p:{p} at f:{frame_index}  l:{line_index} c:{pixel_ix}') if verbose > 2 else None
                 
-            # Allows for offset to collect more than 31 pixels, set true once first non-padding pixel is reached
+            # Allows for offset to collect more than 24 pixels, set true once first non-padding pixel is reached
             if padding_complete == False and p != transparency:
                 padding_complete = True
                 
             if p == transparency:        # Encode transparent pixels
                 print(f'  chose flag 0b000')  if verbose > 2 else None
                 run_length = self.look_ahead(p, frame_index, line_index, pixel_ix) + 1
+
                 # collect all leading padding
                 if not padding_complete:
                     offset += run_length
@@ -661,11 +671,11 @@ class tgrFile:
                 # Don't write trailing padding
                 elif pixel_ix + run_length >= self.framesizes[frame_index][0]:
                     break
-                else:
-                    if run_length == 31:
-                        print(f'31 transparent pixels found, begining scan-ahead at l:{line_index} p:{pixel_ix}') if verbose > 2 else None
+                else:   # consumes all remaining up to end of frame
+                    if run_length == MAX_RUN_LENGTH:
+                        print(f'{MAX_RUN_LENGTH} transparent pixels found, begining scan-ahead at l:{line_index} p:{pixel_ix}') if verbose > 2 else None
                         collected = run_length
-                        while pixel_ix + collected < self.framesizes[frame_index][0] and (ct := self.look_ahead(p, frame_index, line_index, pixel_ix + collected) + 1) == 31:
+                        while pixel_ix + collected < self.framesizes[frame_index][0] and (ct := self.look_ahead(p, frame_index, line_index, pixel_ix + collected) + 1) == MAX_RUN_LENGTH:
                             print(f'   read {ct} more, total is {collected}') if verbose > 2 else None
                             collected += ct
                         collected += ct  # ct won't have been added the final time
